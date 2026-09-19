@@ -336,8 +336,10 @@ def discover_containers(use_sudo=False) -> tuple[list[dict], list[str]]:
                 networks=engine.run_command(prefix+['inspect','--format','{{json .NetworkSettings.Networks}}',row['name']])
                 row['networks']=json.loads(networks)
                 rows.append(row)
-        except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired):
-            issues.append(runtime+' is installed but inaccessible. Use Authorize Docker, or select API only.')
+        except (OSError,RuntimeError,ValueError,subprocess.TimeoutExpired) as exc:
+            issues.append(runtime+' could not be inspected: '+safe_error(exc)+'. '
+                          + ('Use Authorize Docker in Connection settings.' if runtime=='docker'
+                             else 'Check this user’s Podman access.'))
     return rows,issues
 
 
@@ -363,10 +365,14 @@ def resolved_settings(settings: Settings) -> Settings:
     settings.validate()
     value=dataclasses.replace(settings)
     if settings.auto_url and settings.source_mode=='container':
-        rows,_=discover_containers(settings.docker_sudo)
+        rows,issues=discover_containers(settings.docker_sudo)
         selected=[r for r in rows if r['name']==settings.container and r['runtime']==settings.runtime]
         if len(selected)!=1:
-            raise ValueError('The selected container is no longer available. Open Connection settings.')
+            access_issues = [message for message in issues if message.startswith(settings.runtime)]
+            if access_issues:
+                raise ValueError('Cannot verify the selected container. ' + ' '.join(access_issues))
+            raise ValueError('The selected container was not found among running HA containers. '
+                             'Check its name and runtime in Connection settings.')
         value.url=choose_endpoint(selected[0])
     return value
 
@@ -402,7 +408,8 @@ def diagnostics(settings: Settings, token: str) -> list[dict]:
                 args=engine_args(settings,Path('/unused'))
                 src=engine.select_source(args,{'config_dir':'/config'},[])
                 if src['kind']=='local':
-                    ok=(Path(src['path'])/'configuration.yaml').is_file() and os.access(Path(src['path'])/'configuration.yaml',os.R_OK)
+                    engine.readable_config_folder(src['path'])
+                    ok=True
                 else:
                     prefix=['sudo','-n','docker'] if src.get('docker_sudo') else [src['runtime']]
                     engine.run_command(prefix+['exec',src['name'],'python3','-c',

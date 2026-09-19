@@ -21,6 +21,8 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Label, Button, TextArea, RadioList, Checkbox, Frame, Box, SearchToolbar
 from . import __version__
+from .processes import signal_worker
+from .engine import readable_config_folder
 from .ui_widgets import InstantList, CycleChoice, navigation_button, action_rows, wrap_document
 from .state import (Store, Settings, safe_text, safe_error, discover_containers, choose_endpoint,
                     diagnostics, legacy_candidates, remove_legacy, compare_exports, private_replace,
@@ -373,8 +375,7 @@ class ContextUI:
         p.source_dir=self.controls['source_dir'].text.strip()
         p.auto_url=self.controls['auto_url'].checked and p.source_mode=='container'
         if p.source_mode=='local':
-            src=Path(p.source_dir).expanduser()
-            if not (src/'configuration.yaml').is_file():raise ValueError('That folder does not contain configuration.yaml.')
+            src=readable_config_folder(p.source_dir)
             if self.store.root.resolve().is_relative_to(src.resolve()) or src.resolve().is_relative_to(self.store.root.resolve()):
                 raise ValueError('Program files and HA configuration must be separate folders.')
             p.source_dir=str(src.resolve())
@@ -457,13 +458,18 @@ class ContextUI:
         self.show('export','Create a snapshot','No automations, scripts, notifications or lights will be triggered.',rows,start)
 
     async def ensure_docker_auth(self):
-        if not self.settings or not self.settings.docker_sudo:return
+        if not self.settings or self.settings.source_mode!='container' or not self.settings.docker_sudo:return
         proc=await asyncio.to_thread(subprocess.run,['sudo','-n','true'],capture_output=True,check=False)
         if proc.returncode:
             result=await run_in_terminal(lambda:subprocess.run(['sudo','-v'],check=False).returncode)
             if result:raise ValueError('Docker authorization was declined.')
 
     async def export_async(self):
+        if self.busy:return
+        self.export_canceled=False
+        self.busy=True
+        stderr_task=None
+        process=None
         try:
             await self.ensure_docker_auth()
             self.show('progress','Collecting your context','Everything stays on this machine.',[
@@ -473,7 +479,16 @@ class ContextUI:
             self.busy=True
             env={**os.environ,'PYTHONPATH':os.pathsep.join([str(self.store.root/'app'),str(self.store.root/'.vendor')]),'PYTHONDONTWRITEBYTECODE':'1'}
             self.process=await asyncio.create_subprocess_exec(sys.executable,'-m','hacontext','--worker',str(self.store.root),
-                stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.PIPE,env=env,start_new_session=True)
+                stdin=asyncio.subprocess.DEVNULL,stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,env=env)
+            # Keep the controlling terminal/session. The CLI worker creates its
+            # own process group before work, so Cancel never signals this UI.
+            process=self.process
+            async def drain_stderr():
+                # Consume without keeping/logging raw private diagnostics. A
+                # full stderr pipe must never freeze stdout or cancellation.
+                while await process.stderr.read(8192):pass
+            stderr_task=asyncio.create_task(drain_stderr())
             self.job=self.process;last=None
             while True:
                 line=await self.process.stdout.readline()
@@ -486,19 +501,52 @@ class ContextUI:
                     self.set_message(message['message'])
                 else:last=message
             code=await self.process.wait()
+            await stderr_task
             self.busy=False;self.process=None;self.job=None
-            if code<0:self.export_page();self.set_message('Export canceled. No Home Assistant data was changed.');return
-            if not last or last.get('type')!='done':
+            if self.export_canceled:
+                self.export_page();self.set_message('Export canceled. No Home Assistant data was changed.');return
+            if code!=0 or not last or last.get('type')!='done':
                 raise ValueError(last.get('message','Export stopped unexpectedly. No successful snapshot was reported.') if last else 'Export stopped unexpectedly.')
             path=Path(last['path'])
             if path not in self.store.history():raise ValueError('Export completed but the snapshot identity could not be verified.')
             self.export_done(path,last['summary'])
+        except asyncio.CancelledError:
+            if process and process.returncode is None:
+                await self.stop_worker(process)
+            raise
         except Exception as exc:
-            self.busy=False;self.process=None;self.job=None;self.set_message(safe_error(exc))
+            if process and process.returncode is None:
+                await self.stop_worker(process)
+            self.busy=False;self.process=None;self.job=None
+            self.export_error(safe_error(exc))
+        finally:
+            self.busy=False;self.process=None;self.job=None
+            if stderr_task and not stderr_task.done():
+                stderr_task.cancel()
+                try:await stderr_task
+                except asyncio.CancelledError:pass
+
+    def export_error(self,message):
+        self.show('export-error','Export stopped','No successful snapshot was reported.',[
+            self.text_view(message,height=6,name='export-error-detail',search=False,wrap=True),
+            Label('Your saved settings, notes and earlier exports are unchanged.\n'
+                  'For Docker, use the container source rather than a protected host folder.'),
+            self.row(self.button('Retry export',lambda:self.schedule(self.export_async())),
+                     self.button('Connection settings',self.connection)),
+            self.button('Back to export',self.export_page)],scroll=False)
+        self.set_message(message)
+
+    async def stop_worker(self,worker):
+        signal_worker(worker,signal.SIGTERM)
+        try:await asyncio.wait_for(worker.wait(),3)
+        except asyncio.TimeoutError:
+            signal_worker(worker,signal.SIGKILL)
+            await worker.wait()
 
     def cancel_job(self):
         if self.process and self.process.returncode is None:
-            os.killpg(self.process.pid,signal.SIGTERM)
+            self.export_canceled=True
+            signal_worker(self.process,signal.SIGTERM)
             self.set_message('Canceling the export worker...')
 
     def export_done(self,path,summary):
@@ -881,13 +929,7 @@ class ContextUI:
     async def shutdown(self):
         worker=self.process
         if worker and worker.returncode is None:
-            try:os.killpg(worker.pid,signal.SIGTERM)
-            except ProcessLookupError:pass
-            try:await asyncio.wait_for(worker.wait(),3)
-            except asyncio.TimeoutError:
-                try:os.killpg(worker.pid,signal.SIGKILL)
-                except ProcessLookupError:pass
-                await worker.wait()
+            await self.stop_worker(worker)
         if not self.app.is_done:self.app.exit()
 
     def quit(self):

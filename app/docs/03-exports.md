@@ -51,3 +51,12 @@ ha-context snapshot directories are candidates for deletion.
 
 Save filtered view writes selected entity data, not a full configuration export.
 It is explicitly labeled with its source snapshot and narrower scope.
+
+
+## Export stopped
+
+A failed export has a dedicated error screen with **Retry export**,
+**Connection settings**, and **Back to export**. It is not a successful snapshot.
+Earlier snapshots and saved settings/notes are not reset. Authorization errors
+are not evidence that a container was deleted. Cancellation targets the export
+worker's own process group, not the terminal application or the HA container.

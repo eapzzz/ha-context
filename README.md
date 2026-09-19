@@ -201,3 +201,12 @@ See `docs/design.md`, `docs/implementation-plan.md`, `SECURITY.md` and the in-ap
 - https://developers.openai.com/codex/mcp/
 
 MIT-licensed application. Portable distributions retain third-party dependency licenses.
+
+
+### Docker authorization correction (2.1.1)
+
+Export and Diagnostics keep the same SSH terminal authorization context. The
+worker creates a separate process group (not a new session) for targeted Cancel
+and shutdown. Local-folder permission errors are not mislabeled as missing YAML.
+Update normally from Git; no reinstall, new libraries, sudoers change, filesystem
+permission change, or configuration/token migration is needed.

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2.1.1 — Docker export authorization
+
+- Export workers keep the SSH terminal session and use a separate process group.
+  `sudo` authorization is no longer discarded by creating a detached session.
+- Safe cancellation and shutdown target only the worker group, including the
+  interval before the worker has created its group on Python 3.10+.
+- Docker inspection errors are preserved instead of becoming “container gone”.
+- Local folder validation distinguishes permission denial, missing configuration
+  and unreadable files. It does not change any Home Assistant permissions.
+- Export failures show a stopped screen with Retry and Connection settings;
+  stderr is drained without displaying or storing raw private data.
+- Added real worker, process-group, PTY, cancellation, local-file-access and
+  REST/WebSocket regression tests. PTY sudo policy is simulated; no sudoers
+  changes, token migration or new dependencies are needed.
+
+
 ## 2.1.0
 
 - Fixed viewport shell and menu, active-page highlighting, F6 navigation, Esc/back

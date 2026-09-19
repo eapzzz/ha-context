@@ -51,3 +51,27 @@ References:
 https://developers.home-assistant.io/docs/api/rest/
 https://developers.home-assistant.io/docs/api/websocket/
 https://developers.home-assistant.io/docs/apps/communication/
+
+
+## Docker works in checks, but export asks for authentication
+
+In 2.1.0 the export worker created a new terminal session. That discarded the
+per-terminal sudo authentication used by Diagnostics. Version 2.1.1 keeps the
+same terminal session and uses a separate process group only for cancellation.
+
+Run ha-context as your usual SSH user. Choose **Local Docker / Podman container**
+and your Home Assistant container. **Authorize Docker** uses the system's sudo
+prompt when required. Finish the settings flow with **Save & open**, then export.
+Do not use a protected host folder as a workaround. The app neither stores your
+sudo password nor changes sudoers, Docker permissions or Home Assistant files.
+Unusual sudo policies (for example per-parent-process timestamps) can still
+require different authorization; failures are reported, not silently bypassed.
+
+## Permission denied versus missing configuration
+
+**Readable configuration folder** requires this host user's read and directory
+traversal permissions. `/config` inside a container is not `/config` on the host.
+The program now checks file metadata and opens configuration.yaml without reading
+its contents during validation. Permission denial is reported separately from a
+missing file. For a Docker installation, prefer container mode and authorized
+Docker commands instead of changing Home Assistant ownership or permissions.

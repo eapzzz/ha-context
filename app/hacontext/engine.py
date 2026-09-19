@@ -20,6 +20,7 @@ from pathlib import Path
 import re
 import shutil
 import ssl
+import stat
 import subprocess
 import sys
 import time
@@ -550,6 +551,16 @@ def run_command(command, timeout=20):
     # Command stdout is not logged or persisted as a raw transcript.
     proc = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     if proc.returncode:
+        # Classify fixed phrases without exposing a command's raw stderr, which
+        # may contain private data. Non-English messages retain a safe fallback.
+        error = (proc.stderr or '').lower()
+        if Path(command[0]).name == 'sudo' and any(text in error for text in (
+                'password is required', 'authentication is required',
+                'a terminal is required', 'no tty present')):
+            raise RuntimeError('Docker authorization required. Open Connection settings and use Authorize Docker, then retry the export.')
+        if 'docker' in command and any(text in error for text in (
+                'permission denied', 'access denied')):
+            raise RuntimeError('Docker access denied. Use Authorize Docker in Connection settings; this does not mean the container was removed.')
         raise RuntimeError('Command failed: ' + Path(command[0]).name + ' (exit ' + str(proc.returncode) + ')')
     return proc.stdout
 
@@ -582,15 +593,38 @@ def containers(runtime: str, use_sudo: bool = False):
     return found
 
 
+def readable_config_folder(folder: str | Path) -> Path:
+    """Validate host file access without treating EACCES as a missing file.
+
+    stat/open raise the actual OS error; Path.is_file() may return False for
+    permission failures. Opening without reading verifies this user's access.
+    """
+    path = Path(folder).expanduser()
+    target = path / 'configuration.yaml'
+    try:
+        if not stat.S_ISREG(target.stat().st_mode):
+            raise RuntimeError('configuration.yaml is not a regular file in the selected folder.')
+        with target.open('rb'):
+            pass
+        return path.resolve()
+    except PermissionError as exc:
+        raise RuntimeError('Permission denied: the current host user cannot access configuration.yaml. '
+                           'For Docker, select Local Docker / Podman container and use Authorize Docker. '
+                           'Do not change Home Assistant file permissions.') from exc
+    except (FileNotFoundError, NotADirectoryError) as exc:
+        raise RuntimeError('The selected host folder does not contain configuration.yaml. '
+                           '/config usually belongs inside the HA container; use container mode for that path.') from exc
+    except OSError as exc:
+        raise RuntimeError('Cannot check the configuration folder: ' + type(exc).__name__) from exc
+
+
 def select_source(args, config, warnings):
     mode = getattr(args, 'source_mode', 'auto')
     if mode == 'api':
         return None
     # An explicit local override always takes precedence.
     if args.config_dir:
-        path = Path(args.config_dir).expanduser().resolve()
-        if not (path / 'configuration.yaml').is_file():
-            raise RuntimeError('--config-dir does not contain configuration.yaml: ' + str(path))
+        path = readable_config_folder(args.config_dir)
         return {'kind': 'local', 'path': str(path), 'ha_path': config.get('config_dir'),
                 'detection': 'explicit --config-dir'}
     if mode == 'local':

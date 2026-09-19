@@ -16,6 +16,8 @@ def main(argv=None):
     parser.add_argument('--worker',metavar='ROOT',help=argparse.SUPPRESS)
     args=parser.parse_args(argv)
     if args.worker:
+        from .processes import prepare_worker
+        prepare_worker()
         from .worker import main as worker_main
         return worker_main(args.worker)
     root=Path(__file__).resolve().parents[2]
