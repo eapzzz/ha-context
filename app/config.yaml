@@ -1,5 +1,5 @@
 name: ha-context
-version: "2.0.1"
+version: "2.1.0"
 slug: ha_context
 description: Read-only Home Assistant context with guided setup, phone inventory and private exports.
 arch:

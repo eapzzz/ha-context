@@ -1,47 +1,57 @@
 # Workspace navigation
 
-The workspace uses a scrollable left menu, not a row of seven tabs.
+The application has a fixed full-screen workspace. The menu, header and footer
+remain in the same places. The content changes without resizing the background.
+Resize the terminal to change the workspace size; 80 x 24 is the minimum supported.
 
-| Planned area | Actual entry / route |
-| --- | --- |
-| Overview | Overview |
-| Export | Create export |
-| Devices & sensors | Devices & sensors |
-| Diagnostics | Diagnostics |
-| Privacy & preview | Settings → Privacy & retention; Export history → Review |
-| Exports | Export history |
-| Settings & maintenance | Separate Settings and Maintenance entries |
+## Move around
 
-Notes and Documentation are additional entries. Use Tab / Shift-Tab to move,
-Enter to choose, and F1 for documentation. On shorter terminals the menu scrolls.
-The full workspace is available after completing onboarding.
+F6 switches focus between the current page and the menu. In the menu, use Up/Down
+to choose a page and Enter or Right to open it. Clicking a menu entry opens it.
+The active page stays highlighted. Tab and Shift-Tab cycle through controls.
 
-## What the current screens actually do
+Esc returns to the menu. In a note editor it goes back without losing the in-memory
+draft; in a confirmation it cancels that action. F1 opens documentation, F2 opens
+Overview, and Ctrl-Q exits. Ctrl-S saves the currently open context note.
 
-Overview shows the saved address/source and the latest snapshot summary. It does
-not continuously monitor connection health. Diagnostics → Run checks performs
-explicit REST, WebSocket and configuration-access checks.
+Lists have a single selection: moving the highlight selects that item. There is
+no separate checked item that can disagree with the highlight. Mouse clicks,
+Home/End and Page Up/Down use the same selection.
 
-Create export collects a full snapshot in the configured source scope. Devices &
-sensors → Save filtered view writes a selected-entity text view; it is NOT a full
-room/device-scoped configuration export. There is no full room-scoped export yet.
+## Documentation and previews
 
-Devices & sensors reads the latest snapshot, not live data. Search can match IDs,
-platform, area and device fields. Companion App only filters mobile-app entities;
-Phone registrations opens the device-registration inventory. Disabled, unavailable
-and enabled are different conditions.
+Click a chapter or move with arrow keys to open it immediately. Previous and Next
+are available below the reader. Ctrl-F starts a text search, even from the chapter
+list. Enter accepts a search, Esc cancels it. The prose reflows when resized.
+Export previews also open their selected section immediately.
 
-Export history lists snapshots. Review opens the sections of a selected snapshot;
-Compare compares it with the newest other snapshot (not an arbitrary pair picker).
-The text preview is capped at 400,000 characters per section; saved exports are not
-truncated by that preview limit. Full TXT + ZIP remains on the server.
+## Devices and notes
 
-Privacy & retention edits masking preferences and retention. The preview can show
-privacy.txt and issues.json. There is no separate interactive table of every
-masked value. Known credentials are always masked; optional network masking can
-also mask SSID/BSSID/IP readings. Redaction remains best effort.
+Search filters as you type. Phone only limits results to Companion App. The
+status button cycles All entries, Enabled, Disabled and Unavailable; Left/Right
+or Enter changes it. Apply filters is also available. Selecting an entity updates
+its details without another button. Filters and selection survive editing a note.
 
-Maintenance shows Reset settings only when settings exist, and Review old files
-only after recognized old exporter files are found. Reset preserves notes and
-exports. Deletion is a separate confirmed action. HA OS uses Supervisor controls
-for installation removal; Linux has an in-app uninstall action.
+Entity note, Device note and Room note attach private context to exact IDs.
+Notes is the central list; General notes contains household-wide context.
+See the Context notes chapter for what is included in exports.
+
+## Screen names and limits
+
+Overview is the last snapshot summary, not a continuous connection-health monitor.
+Diagnostics runs explicit REST, WebSocket and configuration access checks.
+
+Create export collects the full selected source scope. Save filtered view writes
+only a filtered list of entities, not a room/device-scoped configuration export.
+
+Export history lists snapshots. Review displays files. Compare uses the newest
+other snapshot; there is no arbitrary pair picker. Preview shows at most 400,000
+characters per section. Saved TXT/ZIP are not truncated by this preview limit.
+
+Privacy preferences are under Settings, Privacy & retention. File previews live
+under Export history, Review. Settings and Maintenance are separate menu entries.
+Known credentials are masked best-effort, not guaranteed for arbitrary content.
+
+Maintenance offers Review old files ONLY when recognized older files exist.
+Reset keeps notes and exports. Uninstall is separately confirmed. HA OS still uses
+Supervisor to manage image removal and remains experimental in this project.

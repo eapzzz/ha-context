@@ -12,7 +12,8 @@ On Linux the program offers to install the single command: ha-context.
 All subsequent configuration, diagnostics and maintenance are in the interface.
 
 Tab and Shift-Tab move between controls. Enter activates buttons. Space chooses
-checkboxes and radio options. Arrow keys move within lists. Mouse is supported.
+checkboxes and radio options. Arrow keys immediately select list entries. Mouse is supported.
+F6 switches between menu and content; Esc returns or cancels. Ctrl-S saves notes.
 F1 opens this guide. F2 returns home. Ctrl-Q exits. Ctrl-C cancels an export.
 Text panels support search: focus the text, press Ctrl-F, type and press Enter.
 Long screens scroll to the focused control. Use a terminal of at least 80 x 24.

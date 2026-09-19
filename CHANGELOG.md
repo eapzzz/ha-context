@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.1.0
+
+- Fixed viewport shell and menu, active-page highlighting, F6 navigation, Esc/back
+  handling, mouse focus, and wrapping action rows for narrow terminals.
+- Immediate list selection for chapters, previews and inventory; documentation
+  Previous/Next, reader search and word-based prose wrapping on resize.
+- Reactive inventory search, compact status filter, selected-row details and cached
+  parsed inventory; preserve filters and selected entity when editing context.
+- Private entity/device/area notes, exact-ID export and explicit unmatched targets.
+  Existing general notes are preserved. Drafts survive page switches in-session;
+  quitting warns before discarding them. Ctrl-S saves the current note.
+- Updated in-app help and simpler settings summary. No new dependencies.
+- Regression tests drive keyboard/mouse events, viewport resizing, saved notes,
+  real local REST/WebSocket export and Git fast-forward with private data retained.
+
 ## 2.0.1
 
 - Fix first-run portable ZIP metadata discovery. Dependencies and their metadata

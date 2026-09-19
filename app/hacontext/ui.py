@@ -21,23 +21,26 @@ from prompt_toolkit.layout.controls import FormattedTextControl
 from prompt_toolkit.styles import Style
 from prompt_toolkit.widgets import Label, Button, TextArea, RadioList, Checkbox, Frame, Box, SearchToolbar
 from . import __version__
+from .ui_widgets import InstantList, CycleChoice, navigation_button, action_rows, wrap_document
 from .state import (Store, Settings, safe_text, safe_error, discover_containers, choose_endpoint,
                     diagnostics, legacy_candidates, remove_legacy, compare_exports, private_replace,
                     source_archive)
 
 STYLE=Style.from_dict({
-    '':'bg:#18232c #e3dccf', 'brand':'bg:#18232c #b2a1ce bold',
-    'header':'bg:#18232c #9bbfd3', 'frame.border':'#445966', 'frame.label':'#b2a1ce bold',
-    'sidebar':'bg:#20303b #a9b7c2', 'body':'bg:#23313c #e3dccf',
-    'label':'#e3dccf', 'muted':'#96a9b7', 'title':'#c4b7df bold',
-    'button':'bg:#304654 #d6e4ec', 'button.focused':'bg:#9bbfd3 #172530 bold',
-    'button.arrow':'#d8b26e', 'text-area':'bg:#17252f #e3dccf',
-    'text-area focused':'bg:#1b303e', 'radio-list':'bg:#23313c',
-    'radio-selected':'#9bbfd3 bold', 'radio-checked':'#d8b26e',
-    'checkbox':'#d8b26e', 'checkbox-selected':'#9bbfd3 bold',
-    'status':'bg:#30414c #d8b26e', 'footer':'bg:#152029 #96a9b7',
-    'search-toolbar':'bg:#304654 #ffffff', 'scrollbar.background':'bg:#283945',
-    'scrollbar.button':'bg:#839ead',
+    '':'bg:#13212d #dce7f0', 'brand':'bg:#13212d #dfb983 bold',
+    'header':'bg:#13212d #85b9d4', 'frame.border':'#354a5a', 'frame.label':'#a4c9dc bold',
+    'sidebar':'bg:#111d28 #9bb0bf', 'body':'bg:#172734 #dce7f0',
+    'label':'#dce7f0', 'muted':'#93a9ba', 'title':'#dce7f0 bold',
+    'button':'bg:#253e50 #c9e0ed', 'button.focused':'bg:#9acbe2 #11212d bold',
+    'button.arrow':'#95bacf', 'text-area':'bg:#142330 #dce7f0',
+    'text-area focused':'bg:#1c3242', 'radio-list':'bg:#172734',
+    'radio-selected':'bg:#29495d #e2eff6 bold', 'radio-checked':'#e1bb83',
+    'checkbox':'#e1bb83', 'checkbox-selected':'#9acbe2 bold',
+    'status':'bg:#203646 #dcc39e', 'footer':'bg:#111d28 #9bb0bf',
+    'nav':'bg:#111d28 #9bb0bf','nav.active':'bg:#213a4c #dfb983 bold',
+    'nav.focused':'bg:#314f63 #eef5fa bold',
+    'search-toolbar':'bg:#29495d #ffffff', 'scrollbar.background':'bg:#213747',
+    'scrollbar.button':'bg:#63879d',
 })
 
 
@@ -45,10 +48,13 @@ class ContextUI:
     def __init__(self, store: Store, *, input=None, output=None):
         self.store=store
         self.controls={}
+        self.nav_buttons=[];self.page_focus=None;self.save_action=None
+        self.note_drafts={};self.inventory_filter=('', 'all', False)
+        self._snapshot_cache={}
         self.page=''; self.heading='';self.subtitle=''
         self.message='';self.busy=False;self.process=None
         self.detected=[];self.pending=Settings();self.pending_token='';self.checks=[]
-        self.uninstall_requested=False; self.closing=False
+        self.uninstall_requested=False; self.closing=False; self.exit_pending=False
         self.job=None;self.job_id=0
         self.body=HSplit([Label('Loading…')]);self.side=HSplit([])
         self.initial_error=''
@@ -77,24 +83,52 @@ class ContextUI:
         def interrupt(event):
             if self.busy:self.cancel_job()
             else:self.quit()
+        @bindings.add('f6')
+        def switch_pane(event):self.focus_navigation()
+        @bindings.add('escape', eager=True)
+        def escape(event):
+            if event.app.layout.is_searching:
+                from prompt_toolkit.search import stop_search
+                stop_search();return
+            if self.page=='confirm' and getattr(self,'cancel_action',None):self.cancel_action()
+            elif self.page=='annotation' and getattr(self,'annotation_back',None):self.annotation_back()
+            else:self.focus_navigation()
+        @bindings.add('c-s')
+        def save_current(event):
+            if self.save_action and not self.busy:self.save_action()
+        @bindings.add('c-f')
+        def search_current(event):
+            from prompt_toolkit.search import start_search
+            control=event.app.layout.current_control
+            name={'docs':'doc-text','preview':'preview-text'}.get(self.page)
+            if name and name in self.controls:
+                area=self.controls[name];event.app.layout.focus(area);control=area.control
+            if hasattr(control,'search_buffer_control') and control.search_buffer_control:
+                start_search(control)
+        self.workspace=VSplit([
+            Box(DynamicContainer(lambda:self.side),padding_left=1,padding_right=1,
+                padding_top=1,padding_bottom=0,width=Dimension.exact(24),style='class:sidebar'),
+            Window(width=1,char='│',style='class:frame.border'),
+            Box(HSplit([
+                Window(FormattedTextControl(lambda:[('class:title',self.heading)]),height=1),
+                Window(FormattedTextControl(lambda:safe_text(self.subtitle)),height=2,wrap_lines=True,style='class:muted'),
+                DynamicContainer(lambda:self.body),
+            ],style='class:body'),padding_left=2,padding_right=2,padding_top=1,
+               padding_bottom=1,style='class:body')
+        ],height=lambda:Dimension.exact(max(1,self.app.output.get_size().rows-4)),style='class:body')
         root=HSplit([
-            Window(FormattedTextControl([('class:brand','  ha-context'),('class:header','   /   HOME ASSISTANT INVENTORY'),
-                                        ('class:muted','   '+__version__)]),height=1),
-            Window(FormattedTextControl('  HA  ── read ──  REVIEW  ── save ──  TXT / ZIP'),height=1,style='class:muted'),
-            VSplit([
-                Box(DynamicContainer(lambda:self.side),padding=1,width=Dimension.exact(25),style='class:sidebar'),
-                Frame(HSplit([
-                    Window(FormattedTextControl(lambda:[('class:title',self.heading)]),height=1),
-                    Label(lambda:safe_text(self.subtitle),style='class:muted'),
-                    Window(height=1),
-                    DynamicContainer(lambda:self.body),
-                ]),title='Workspace',style='class:body')
-            ]),
-            Window(FormattedTextControl(lambda:safe_text(' '+self.message)),height=2,wrap_lines=True,style='class:status'),
-            Window(FormattedTextControl(' Tab / Shift-Tab: move   Enter / Space: choose   F1: help   F2: home   Ctrl-Q: quit'),height=1,style='class:footer'),
+            Window(FormattedTextControl(lambda:[('class:brand','  ha-context'),
+                ('class:header','  /  HOME ASSISTANT CONTEXT'),('class:muted','  '+__version__)]),height=1),
+            Window(FormattedTextControl(lambda:'  '+safe_text(self.pending.label)+'  ·  LOCAL / READ ONLY'),height=1,style='class:muted'),
+            self.workspace,
+            Window(FormattedTextControl(lambda:safe_text(' '+(str(len(self.note_drafts))+' unsaved note(s) · ' if self.note_drafts else '')+self.message)),height=1,style='class:status'),
+            Window(FormattedTextControl(' F6 Menu  Tab Next  Esc Back/Menu  Ctrl-S Save  F1 Help  Ctrl-Q Quit'),height=1,style='class:footer'),
         ])
         self.app=Application(layout=Layout(root),key_bindings=bindings,style=STYLE,
             full_screen=True,mouse_support=True,input=input,output=output)
+        self.app.ttimeoutlen=.04
+        self.doc_resize=None
+        self.app.before_render+=lambda _: self.doc_resize() if self.page=='docs' and self.doc_resize else None
         self.sidebar()
         if self.initial_error:self.recovery()
         elif self.settings:self.overview()
@@ -107,62 +141,101 @@ class ContextUI:
                 self.set_message('A task is running. Cancel it before leaving this screen.');return
             try:handler()
             except Exception as exc:self.set_message(safe_error(exc))
-        button=Button(text=text,handler=guarded,width=max(12,min(30,len(text)+4)))
+        button=Button(text=text,handler=guarded,width=max(10,min(30,len(text)+2)),left_symbol=' ',right_symbol=' ')
         if name:self.controls[name]=button
         return button
 
     def row(self,*buttons):
-        return VSplit(list(buttons)+[Window()],padding=1,height=1)
+        return action_rows(buttons,lambda:max(20,self.app.output.get_size().columns-29))
 
     def field(self,name,label,value='',*,password=False,height=1):
-        area=TextArea(text=str(value),multiline=height>1,password=password,height=height,
+        area=TextArea(text=str(value),multiline=height>1,password=password,height=height,focus_on_click=True,
                       scrollbar=height>1,wrap_lines=height>1,name=name)
         self.controls[name]=area
         return HSplit([Label(label,style='class:muted'),area],padding=0)
 
-    def select(self,name,values,default=None):
-        value=RadioList(values,default=default,show_scrollbar=True)
+    def select(self,name,values,default=None,on_change=None):
+        value=InstantList(values,default=default,on_change=on_change)
         self.controls[name]=value
         return value
 
     def check(self,name,label,value=False):
-        c=Checkbox(label,checked=value);self.controls[name]=c;return c
+        c=Checkbox(label,checked=value);c.show_scrollbar=False;self.controls[name]=c;return c
 
     def sidebar(self):
+        self.nav_buttons=[]
         if self.onboarding:
-            steps=['Welcome','Connection','Configuration source','Privacy & notes','Ready']
             widgets=[Label('FIRST RUN',style='class:muted'),Window(height=1)]
-            for n,text in enumerate(steps,1):widgets.append(Label(f'{n}  {text}'))
-            widgets.extend([Window(height=1),self.button('Documentation',self.docs),Window(height=1),
-                            self.button('Maintenance',self.maintenance),Window()])
+            widgets += [Label(t) for t in ['1  Welcome','2  Connection','3  Source','4  Privacy & notes','5  Ready']]
+            items=[('Documentation',self.docs,'docs'),('Maintenance',self.maintenance,'maintenance')]
+            widgets.append(Window(height=1))
         else:
-            widgets=[Label('YOUR WORKSPACE',style='class:muted'),Window(height=1)]
-            for label,action in [('Overview',self.overview),('Create export',self.export_page),
-                    ('Devices & sensors',self.inventory),('Export history',self.history),
-                    ('Diagnostics',self.diagnostics_page),('Notes',self.notes_page),
-                    ('Documentation',self.docs),('Settings',self.settings_page),('Maintenance',self.maintenance)]:
-                widgets.extend([self.button(label,action),Window(height=1)])
-            widgets.append(Window())
-        widgets.append(self.button('Exit',self.quit))
-        self.side=ScrollablePane(HSplit(widgets),show_scrollbar=False,max_available_height=80)
+            widgets=[Label('WORKSPACE',style='class:muted'),Window(height=1)]
+            items=[('Overview',self.overview,'overview'),('Create export',self.export_page,'export'),
+                ('Devices & sensors',self.inventory,'inventory'),('Export history',self.history,'history'),
+                ('Diagnostics',self.diagnostics_page,'diagnostics'),('Notes',self.notes_page,'notes'),
+                ('Documentation',self.docs,'docs'),('Settings',self.settings_page,'settings'),
+                ('Maintenance',self.maintenance,'maintenance')]
+        for label,action,route in items:
+            button=self.button(label,action)
+            navigation_button(button,lambda r=route:self.active_route()==r,self.move_navigation)
+            self.nav_buttons.append((route,button));widgets.append(button)
+        widgets += [Window(height=1),Label('F6  Menu / content',style='class:muted'),
+                    Label('↑↓  Choose a page',style='class:muted'),Window(height=1),self.button('Exit',self.quit)]
+        self.side=ScrollablePane(HSplit(widgets),show_scrollbar=False,max_available_height=40)
+
+    def active_route(self):
+        groups={'annotation':'notes','global-notes':'notes','note-target':'notes',
+                'preview':'history','compare':'history','done':'export','progress':'export',
+                'connection':'settings','source':'settings','privacy':'settings','ready':'settings',
+                'legacy':'maintenance','update':'maintenance','confirm':'maintenance','package-update':'maintenance'}
+        return groups.get(self.page,self.page)
+
+    def move_navigation(self,delta):
+        if not self.nav_buttons:return
+        buttons=[b for _,b in self.nav_buttons]
+        current=next((i for i,b in enumerate(buttons) if self.app.layout.has_focus(b)),0)
+        self.app.layout.focus(buttons[(current+delta)%len(buttons)])
+
+    def focus_navigation(self):
+        if not self.nav_buttons:return
+        if any(self.app.layout.has_focus(b) for _,b in self.nav_buttons) and self.page_focus:
+            try:self.app.layout.focus(self.page_focus);return
+            except ValueError:pass
+        button=next((b for r,b in self.nav_buttons if r==self.active_route()),self.nav_buttons[0][1])
+        self.app.layout.focus(button)
+
+    def snapshot(self):
+        history=self.store.history()
+        if not history:return None,[]
+        path=history[0];file=path/'entities.json'
+        stamp=(path,file.stat().st_mtime_ns,file.stat().st_size)
+        if self._snapshot_cache.get('stamp')!=stamp:
+            self._snapshot_cache={'stamp':stamp,'path':path,'entities':json.loads(file.read_text())}
+        return path,self._snapshot_cache['entities']
 
     def show(self,page,title,subtitle,widgets,focus=None,*,scroll=True):
-        self.page=page;self.heading=title;self.subtitle=subtitle
-        self.body=ScrollablePane(HSplit(widgets+[Window(height=1)],padding=1)) if scroll else HSplit(widgets,padding=1)
+        self.page=page;self.heading=title;self.subtitle=subtitle;self.save_action=None
+        self.body=ScrollablePane(HSplit(widgets+[Window(height=1)],padding=1),max_available_height=250) if scroll else HSplit(widgets,padding=1)
         self.message=''
         try:
             if focus:self.app.layout.focus(focus)
-            else:self.app.layout.focus_next()
+            else:
+                from prompt_toolkit.layout import to_container
+                from prompt_toolkit.layout.layout import walk
+                choices=[w for w in walk(to_container(self.body)) if isinstance(w,Window) and w.content.is_focusable()]
+                if choices:self.app.layout.focus(choices[0])
+            self.page_focus=self.app.layout.current_window
         except ValueError:pass
         self.app.invalidate()
 
     def set_message(self,message):
         self.message=safe_text(message);self.app.invalidate()
 
-    def text_view(self,text,height=None,*,name='viewer',search=True):
+    def text_view(self,text,height=None,*,name='viewer',search=True,wrap=False):
         toolbar=SearchToolbar() if search else None
-        area=TextArea(text=safe_text(text),read_only=True,scrollbar=True,wrap_lines=False,
-                      search_field=toolbar,height=height)
+        area=TextArea(text=safe_text(text),read_only=True,scrollbar=True,wrap_lines=wrap,
+                      search_field=toolbar,height=height,focus_on_click=True)
         self.controls[name]=area
         return HSplit([area,toolbar] if toolbar else [area])
 
@@ -478,53 +551,79 @@ class ContextUI:
             with target.open() as f:text=f.read(400000)
             if target.stat().st_size>400000:text+='\n\n[Preview limited to 400,000 characters; the export file is not truncated.]'
             self.controls['preview-text'].text=safe_text(text)
+        pick.on_change=lambda _:open_section()
         area=self.text_view('',name='preview-text')
         self.show('preview','Review before sharing',str(path),[
             VSplit([Frame(pick,title='Sections',width=30),area],padding=1),
             self.row(self.button('Open section',open_section),self.button('Back',self.history))],pick,scroll=False)
         open_section()
 
-    def inventory(self,phones=False):
-        history=self.store.history()
-        if not history:self.overview();self.set_message('Create a snapshot to browse devices.');return
-        path=history[0];all_rows=json.loads((path/'entities.json').read_text())
+    def inventory(self,phones=None):
+        path,all_rows=self.snapshot()
+        if not path:self.overview();self.set_message('Create a snapshot to browse devices.');return
         self.inventory_rows=all_rows
-        search=self.field('inventory-search','Search entity ID, name, device, area or platform','')
-        phone=self.check('phones-only','Companion App only',phones)
-        status=self.select('entity-status',[('all','All entries'),('enabled','Enabled'),('disabled','Disabled'),('unavailable','Unavailable')],'all')
-        table=self.select('entities',[('','Press Apply filters')],'')
+        q,selected_status,previous_phone=self.inventory_filter
+        ph=previous_phone if phones is None else phones
+        search=self.field('inventory-search','Search IDs, names, rooms or platforms',q)
+        phone=self.check('phones-only','Phone only',ph);phone.width=15
+        status=CycleChoice([('all','All entries'),('enabled','Enabled'),('disabled','Disabled'),('unavailable','Unavailable')],selected_status)
+        self.controls['entity-status']=status
+        table=self.select('entities',[('', 'Loading inventory')],'')
+        table.current_value=getattr(self,'inventory_selected','')
         self.controls['inventory-table']=table
-        details=self.text_view('',height=8,name='entity-details',search=False)
-        def apply_filter():
-            q=self.controls['inventory-search'].text.casefold()
-            state=self.controls['entity-status'].current_value
-            ph=self.controls['phones-only'].checked
-            rows=[]
-            for r in all_rows:
-                disabled=bool(r.get('disabled_by'))
-                if ph and r.get('platform')!='mobile_app':continue
-                if state=='enabled' and disabled:continue
-                if state=='disabled' and not disabled:continue
-                if state=='unavailable' and r.get('state')!='unavailable':continue
-                if q and q not in json.dumps(r,ensure_ascii=False).casefold():continue
-                rows.append(r)
-            self.filtered_entities=rows
-            table.values=[(r['entity_id'],safe_text(r['entity_id']+'  ·  '+('DISABLED' if r.get('disabled_by') else str(r.get('state','unknown'))))) for r in rows] or [('', 'No matching entities')]
-            table.current_value=table.values[0][0];table._selected_index=0
-            self.set_message(f'{len(rows)} matches from {path.name}. These are snapshot readings, not live readings.')
+        details=self.text_view('',name='entity-details',search=False,wrap=True)
+        detail_area=self.controls['entity-details']
+        by_id={r['entity_id']:r for r in all_rows}
+        searchable={r['entity_id']:json.dumps(r,ensure_ascii=False).casefold() for r in all_rows}
+        def selected():return by_id.get(table.current_value)
         def show_entity():
-            row=next((r for r in all_rows if r['entity_id']==table.current_value),None)
-            self.controls['entity-details'].text=safe_text(json.dumps(row,indent=2,ensure_ascii=False)) if row else 'No selection.'
+            r=selected()
+            if not r:detail_area.text='No matching entity.';return
+            self.inventory_selected=r['entity_id']
+            device=r.get('device_id');area=r.get('effective_area_id') or r.get('area_id')
+            text=(r.get('name') or r['entity_id'])+'\n'+r['entity_id']+'\n\n'
+            text+='State: '+str(r.get('state','unknown'))+'\nRegistry: '+('Disabled ('+str(r['disabled_by'])+')' if r.get('disabled_by') else 'Enabled')
+            text+='\nPlatform: '+str(r.get('platform') or 'Not supplied')+'\nRoom: '+str(r.get('effective_area_name') or area or 'Not assigned')
+            text+='\nDevice: '+str(device or 'Not linked')
+            for kind,ident in [('entity',r['entity_id']),('device',device),('area',area)]:
+                note=self.store.annotation(kind,ident) if ident else ''
+                if note:text+='\n\n'+kind.title()+' note (user context):\n'+note
+            text+='\n\nAttributes\n'+json.dumps(r.get('attributes',{}),indent=2,ensure_ascii=False)
+            detail_area.text=safe_text(text);detail_area.buffer.cursor_position=0
+        def apply_filter():
+            query=self.controls['inventory-search'].text.casefold()
+            state=status.current_value;companion=phone.checked
+            self.inventory_filter=(self.controls['inventory-search'].text,state,companion)
+            rows=[r for r in all_rows if (not companion or r.get('platform')=='mobile_app')
+                  and (state!='enabled' or not r.get('disabled_by'))
+                  and (state!='disabled' or r.get('disabled_by'))
+                  and (state!='unavailable' or r.get('state')=='unavailable')
+                  and (not query or query in searchable[r['entity_id']])]
+            self.filtered_entities=rows
+            table.replace([(r['entity_id'],safe_text(r['entity_id']+' · '+('disabled' if r.get('disabled_by') else str(r.get('state','unknown'))))) for r in rows])
+            show_entity();self.set_message(f'{len(rows)} / {len(all_rows)} entities · snapshot {path.name} · not live')
+        def annotate(kind):
+            r=selected()
+            if not r:self.set_message('Select an entity first.');return
+            ident={'entity':r['entity_id'],'device':r.get('device_id'),'area':r.get('effective_area_id') or r.get('area_id')}[kind]
+            if not ident:self.set_message('This entity has no '+kind+' link in the snapshot.');return
+            self.edit_annotation(kind,ident,self.inventory)
         def save_selection():
-            rows=getattr(self,'filtered_entities',[])
             out=self.store.local/'selections'/'selected-entities.txt'
-            private_replace(out,'SELECTED ENTITY VIEW — not a full HA configuration.\nSource snapshot: '+path.name+'\n\n'+json.dumps(rows,ensure_ascii=False,indent=2))
+            private_replace(out,'SELECTED ENTITY VIEW — not a full HA configuration.\nSource snapshot: '+path.name+'\n\n'+json.dumps(self.filtered_entities,ensure_ascii=False,indent=2))
             self.set_message('Saved filtered view: '+str(out))
-        self.show('inventory','Devices & sensors','Correct IDs, registry status and Companion App registrations.',[
-            search,self.row(phone,self.button('Apply filters',apply_filter)),
-            Box(status,height=4,padding=0),Box(table,height=Dimension(min=3,max=10),padding=0),
-            self.row(self.button('Show details',show_entity),self.button('Save filtered view',save_selection)),details,
-            self.button('Phone registrations',lambda:self.preview(path,'companion.json'))],self.controls['inventory-search'])
+        table.on_change=lambda _:show_entity()
+        status.on_change=lambda _:apply_filter()
+        toggle=phone._handle_enter
+        def on_toggle():toggle();apply_filter()
+        phone._handle_enter=on_toggle
+        panels=VSplit([Frame(table,title='Entities'),Frame(details,title='Selected entity')],padding=1,height=Dimension(min=4,weight=1))
+        self.show('inventory','Devices & sensors','Snapshot data. Select a row to inspect it or attach context.',[
+            search,self.row(phone,status,self.button('Apply filters',apply_filter)),panels,
+            self.row(self.button('Entity note',lambda:annotate('entity')),self.button('Device note',lambda:annotate('device')),self.button('Room note',lambda:annotate('area'))),
+            self.row(self.button('Save filtered view',save_selection),self.button('Phone registrations',lambda:self.preview(path,'companion.json'))),
+        ],self.controls['inventory-search'],scroll=False)
+        self.controls['inventory-search'].buffer.on_text_changed+=lambda _:apply_filter()
         apply_filter()
 
     def diagnostics_page(self):
@@ -547,37 +646,147 @@ class ContextUI:
         finally:self.busy=False
 
     def notes_page(self):
-        editor=self.field('notes-editor','Physical context, intent and external applications',self.store.notes.read_text() if self.store.notes.exists() else '',height=13)
-        def save():private_replace(self.store.notes,self.controls['notes-editor'].text);self.set_message('Notes saved. They will be included in the next export.')
-        self.show('notes','Notes for future chats','Never put credentials here. Notes are included as user-provided context.',[
-            editor,self.button('Save notes',save)],self.controls['notes-editor'])
+        notes=self.store.load_annotations()
+        pick=self.select('note-list',[((n['kind'],n['id']),n['kind'].title()+' · '+n['id']) for n in notes] or [('', 'No object notes yet')])
+        viewer=self.text_view('',name='note-preview',wrap=True)
+        target=self.controls['note-preview']
+        def preview():
+            key=pick.current_value
+            target.text=safe_text(self.store.annotation(*key)) if key else 'Attach a note to an entity, device or room.\n\nGlobal context is separate and remains available in General notes.'
+        def edit():
+            if not pick.current_value:self.note_target();return
+            self.edit_annotation(*pick.current_value,self.notes_page)
+        pick.on_change=lambda _:preview()
+        general=self.note_drafts.get('general',self.store.notes.read_text() if self.store.notes.exists() else '')
+        self.show('notes','Context notes','Included in your next export. They never modify Home Assistant.',[
+            Label(f'{len(notes)} object notes  ·  {len(general)} characters of general context',style='class:muted'),
+            VSplit([Frame(pick,title='Attached to',width=Dimension(weight=1)),Frame(viewer,title='Note',width=Dimension(weight=1))],padding=1,height=Dimension(min=4,weight=1)),
+            self.row(self.button('General notes',self.general_notes),self.button('Add note',self.note_target),self.button('Edit note',edit)),
+        ],pick,scroll=False)
+        preview()
+
+    def general_notes(self):
+        saved=self.store.notes.read_text() if self.store.notes.exists() else ''
+        editor=TextArea(text=self.note_drafts.get('general',saved),multiline=True,scrollbar=True,wrap_lines=True,focus_on_click=True)
+        self.controls['notes-editor']=editor
+        def changed(_):
+            if editor.text==saved:self.note_drafts.pop('general',None)
+            else:self.note_drafts['general']=editor.text
+        editor.buffer.on_text_changed+=changed
+        def save():
+            nonlocal saved
+            private_replace(self.store.notes,editor.text);saved=editor.text;self.note_drafts.pop('general',None)
+            self.set_message('General notes saved. Create a new export to include them.')
+        self.show('global-notes','General context','For household rules and external applications. Ctrl-S saves.',[
+            editor,self.row(self.button('Save notes',save),self.button('Back',self.notes_page))
+        ],editor,scroll=False)
+        self.save_action=save
+
+    def note_target(self):
+        path,rows=self.snapshot()
+        if not path:self.set_message('Create an export first so targets come from actual IDs.');return
+        candidates={'entity':[(r['entity_id'],(r.get('name') or r['entity_id'])+' · '+r['entity_id']) for r in rows], 'device':[], 'area':[]}
+        for kind,name in [('device','device'),('area','area')]:
+            f=path/'registries'/f'{name}.json'
+            records=json.loads(f.read_text()) if f.exists() else []
+            for r in records:
+                ident=r.get('area_id',r.get('id')) if kind=='area' else r.get('id')
+                if ident:candidates[kind].append((ident,str(r.get('name_by_user') or r.get('name') or ident)+' · '+ident))
+        kind=self.select('note-kind',[('entity','Entity / sensor'),('device','Device'),('area','Room / area')],'entity')
+        search=self.field('note-search','Find a target','')
+        choices=self.select('note-target',[('', 'Select a target')])
+        def filter_():
+            q=self.controls['note-search'].text.casefold()
+            choices.replace([(ident,safe_text(label)) for ident,label in candidates[kind.current_value] if q in label.casefold()])
+        def edit():
+            if choices.current_value:self.edit_annotation(kind.current_value,choices.current_value,self.notes_page)
+            else:self.set_message('No matching target in this snapshot.')
+        kind.on_change=lambda _:filter_()
+        self.show('note-target','Attach context','Only real IDs from the latest snapshot are offered.',[
+            Box(kind,height=3,padding=0),search,Frame(choices,title='Targets'),
+            self.row(self.button('Write note',edit),self.button('Back',self.notes_page))
+        ],self.controls['note-search'],scroll=False)
+        self.controls['note-search'].buffer.on_text_changed+=lambda _:filter_()
+        filter_()
+
+    def edit_annotation(self,kind,ident,back=None):
+        self.annotation_back=back or self.notes_page
+        key=(kind,ident)
+        editor=TextArea(text=self.note_drafts.get(key,self.store.annotation(kind,ident)),
+                        multiline=True,scrollbar=True,wrap_lines=True,focus_on_click=True)
+        self.controls['annotation-editor']=editor
+        editor.buffer.on_text_changed+=lambda _:self.note_drafts.__setitem__(key,editor.text)
+        def save():
+            self.store.save_annotation(kind,ident,editor.text);self.note_drafts.pop(key,None)
+            self.annotation_back();self.set_message('Note saved. Create a new export to include it.')
+        def delete():
+            self.confirm('Delete this context note?',ident,'DELETE',lambda:remove())
+        def remove():
+            self.store.save_annotation(kind,ident,'');self.note_drafts.pop(key,None);self.annotation_back()
+        self.show('annotation',kind.title()+' note',ident,[
+            Label('Describe placement, purpose or constraints. No passwords or tokens.',style='class:muted'),
+            editor,self.row(self.button('Save note',save),self.button('Delete note',delete),self.button('Back',self.annotation_back))
+        ],editor,scroll=False)
+        self.save_action=save
 
     def docs(self):
-        docs=self.store.root/'app/docs'
-        files=sorted(docs.glob('*.md'))
+        files=sorted((self.store.root/'app/docs').glob('*.md'))
         if not files:self.set_message('Documentation files are missing from this installation.');return
-        pick=self.select('docs',[(str(p),p.stem.replace('-',' ').title()) for p in files],str(files[0]))
-        viewer=self.text_view(files[0].read_text(),name='doc-text')
-        def open_doc():self.controls['doc-text'].text=safe_text(Path(pick.current_value).read_text())
-        self.show('docs','Documentation','Included with the app. Use Ctrl-F inside the text to search.',[
-            VSplit([Frame(pick,title='Chapters',width=25),viewer],padding=1),
-            self.row(self.button('Open chapter',open_doc),self.button('Back',self.overview if self.settings else self.welcome))],pick,scroll=False)
+        contents={str(p):p.read_text(encoding='utf-8') for p in files}
+        short={'01':'Start here','02':'Connection','03':'Exports','04':'Phone sensors','05':'Privacy','06':'Maintenance','07':'Export or MCP','08':'Navigation','09':'Context notes'}
+        labels=[(str(p),short.get(p.stem[:2],p.stem.replace('-',' '))) for p in files]
+        pick=self.select('docs',labels,getattr(self,'doc_selected',str(files[0])))
+        viewer=self.text_view('',name='doc-text',wrap=True)
+        area=self.controls['doc-text']
+        rendering={'width':None,'chapter':None}
+        def render_doc():
+            width=max(18,self.app.output.get_size().columns-52)
+            if rendering['width']==width and rendering['chapter']==pick.current_value:return
+            old_position=area.buffer.cursor_position if rendering['chapter']==pick.current_value else 0
+            area.text=safe_text(wrap_document(contents[pick.current_value],width))
+            area.buffer.cursor_position=min(old_position,len(area.text))
+            rendering.update(width=width,chapter=pick.current_value)
+        self.doc_resize=render_doc
+        def open_doc():
+            self.doc_selected=pick.current_value
+            render_doc();area.buffer.cursor_position=0
+            self.set_message(f'Chapter {pick._selected_index+1} / {len(files)} · ↑↓ or click a chapter · Ctrl-F searches the text')
+        pick.on_change=lambda _:open_doc()
+        chapters=Frame(pick,title='Chapters',width=Dimension.exact(21))
+        self.show('docs','Documentation','Offline guide. Selecting a chapter opens it immediately.',[
+            VSplit([chapters,viewer],padding=1,height=Dimension(min=4,weight=1)),
+            self.row(self.button('Previous',lambda:pick.move(-1)),self.button('Next',lambda:pick.move(1)),self.button('Back',self.overview if self.settings else self.welcome))
+        ],pick,scroll=False)
+        open_doc()
 
     def settings_page(self):
         if not self.settings:self.welcome();return
-        settings=dataclasses.asdict(self.settings)
-        self.show('settings','Settings','Credentials are never displayed here.',[
-            self.text_view(json.dumps(settings,indent=2,ensure_ascii=False),height=13),
+        cfg=self.settings
+        source={'api':'API only','local':'Local configuration folder','container':cfg.runtime.title()+' container'}.get(cfg.source_mode,cfg.source_mode)
+        location=cfg.container if cfg.source_mode=='container' else cfg.source_dir if cfg.source_mode=='local' else 'No configuration files selected'
+        self.show('settings','Settings','Private credentials stay in this installation.',[
+            Frame(Label(safe_text(cfg.url)+'\n'+source+'\n'+safe_text(location)),title='Connection & source'),
+            Frame(Label(f'Keep {cfg.retention or "all"} snapshots  ·  Timeout {cfg.timeout}s\nDevice capabilities: '+('included' if cfg.device_details else 'not selected')+'\nNetwork identifiers: '+('masked' if cfg.network_privacy else 'retained for context')),title='Export preferences'),
             self.row(self.button('Edit settings',self.connection),self.button('Privacy & retention',self.privacy_page)),
             self.row(self.button('Repair command',lambda:self.schedule(self.install_command())),self.button('Maintenance',self.maintenance))])
 
     def confirm(self,title,details,word,action:Callable):
+        saved=(self.page,self.heading,self.subtitle,self.body,self.controls.copy(),self.page_focus,self.save_action)
+        def cancel():
+            self.page,self.heading,self.subtitle,self.body,self.controls,self.page_focus,self.save_action=saved
+            self.cancel_action=None;self.exit_pending=False
+            if self.page_focus:
+                try:self.app.layout.focus(self.page_focus)
+                except ValueError:pass
+            self.app.invalidate()
+        self.cancel_action=cancel
         entry=self.field('confirm-word','Type '+word+' to confirm','')
+        field=self.controls['confirm-word']
         def confirm_action():
-            if self.controls['confirm-word'].text!=word:raise ValueError('Confirmation does not match. Nothing changed.')
+            if field.text!=word:raise ValueError('Confirmation does not match. Nothing changed.')
             action()
         self.show('confirm',title,details,[entry,
-            self.row(self.button('Confirm',confirm_action,name='confirm'),self.button('Cancel',self.maintenance))],self.controls['confirm-word'])
+            self.row(self.button('Confirm',confirm_action,name='confirm'),self.button('Cancel',cancel))],field)
 
     def reset_confirm(self):
         def reset():
@@ -683,6 +892,17 @@ class ContextUI:
 
     def quit(self):
         if self.closing:return
+        if self.note_drafts:
+            if not self.exit_pending:
+                self.exit_pending=True
+                self.confirm('Unsaved context notes',
+                    'Cancel and save your notes with Ctrl-S, or type DISCARD to quit without saving drafts.',
+                    'DISCARD',self._quit_now)
+            return
+        self._quit_now()
+
+    def _quit_now(self):
+        if self.closing:return
         self.closing=True
         if self.process and self.process.returncode is None:
             self.app.create_background_task(self.shutdown())
@@ -692,5 +912,5 @@ class ContextUI:
         def signals():
             loop=asyncio.get_running_loop()
             for sig in (signal.SIGTERM,signal.SIGHUP):
-                loop.add_signal_handler(sig,self.quit)
+                loop.add_signal_handler(sig,self._quit_now)
         self.app.run(pre_run=signals)

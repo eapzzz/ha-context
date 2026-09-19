@@ -4,6 +4,32 @@ A read-only Home Assistant inventory app. Guided setup, phone sensors, configura
 privacy review and a reusable TXT/ZIP snapshot — in one English terminal workspace.
 No model, MCP server, telemetry or automatic upload is used.
 
+## Workspace 2.1
+
+The workspace keeps one full-screen background, fixed navigation and a stable footer.
+F6 focuses the menu, arrows choose a page, Enter opens it. Tab cycles controls;
+Esc returns/cancels and Ctrl-S saves the open note. Mouse controls follow the same
+selection as the keyboard. Long action rows wrap rather than overflowing a small terminal.
+
+Documentation chapters and file previews open on selection. Documentation also has
+Previous/Next and Ctrl-F search. Entity search filters while typing, and selecting
+an entity shows its details. Reopening the inventory reuses its parsed snapshot.
+
+Attach descriptions directly with **Entity note**, **Device note**, or **Room note**.
+**Notes → General notes** keeps the existing household-wide text. Notes are private,
+never written into HA, and included in new exports as `annotations.json` and
+`user-notes.md`. IDs are exact; unmatched targets are explicitly marked. Notes saved
+before this release are preserved, and reset does not remove either type.
+
+### Updating an existing Git-connected installation
+
+Overlay the source archive contents into your LOCAL source checkout (the folder
+containing `.git`). Review the diff, stage new and modified files, commit, and push.
+On the server, choose **Maintenance → Update from Git**, confirm, then restart
+`ha-context`. Do not reinstall or repeat onboarding. This version adds no dependencies
+and leaves `.git`, `.vendor`, `.venv`, tokens, settings and existing exports alone.
+Source files only are packaged. Do not publish the server's `local/` folder.
+
 ## Start on Linux
 
 **Recommended: use the portable release `ha-context.pyz`.** Copy it to the Linux server
@@ -101,7 +127,8 @@ ha-context/
   local/                 private, never included in source sharing
     config.json          preferences and selected HA source
     token                personal HA token, mode 600
-    notes.md             your notes for future chats
+    notes.md             general context for future chats
+    annotations.json     private notes tied to entities, devices and areas
     exports/             completed snapshots
     logs/                tool diagnostics, not HA history
   ha-context             launcher

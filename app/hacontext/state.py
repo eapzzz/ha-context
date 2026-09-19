@@ -101,6 +101,7 @@ class Store:
         self.local = Path('/data/local') if self.addon else self.root / 'local'
         self.config = self.local / 'config.json'
         self.notes = self.local / 'notes.md'
+        self.annotations = self.local / 'annotations.json'
         self.exports = self.local / 'exports'
         self.logs = self.local / 'logs'
 
@@ -158,6 +159,46 @@ class Store:
             (self.local/'token').unlink()
         if not self.notes.exists():
             private_replace(self.notes, '')
+
+    def load_annotations(self) -> list[dict[str, str]]:
+        """Read only the tool's typed context notes, never HA configuration."""
+        path=self.annotations
+        if not path.exists() and not path.is_symlink():
+            return []
+        if path.is_symlink() or path.stat().st_size>1_048_576:
+            raise ValueError('Unsafe or oversized context notes file.')
+        try:
+            data=json.loads(path.read_text(encoding='utf-8'))
+            if data.get('schema')!=1 or not isinstance(data.get('annotations'),list):
+                raise ValueError()
+            result=[];seen=set()
+            for item in data['annotations']:
+                kind,ident,note=item['kind'],item['id'],item['note']
+                if kind not in {'entity','device','area'} or not isinstance(ident,str) or not ident or len(ident)>512:
+                    raise ValueError()
+                if any(ord(c)<32 for c in ident) or not isinstance(note,str) or len(note)>20000:
+                    raise ValueError()
+                if (kind,ident) in seen:raise ValueError()
+                seen.add((kind,ident));result.append({'kind':kind,'id':ident,'note':note})
+            return result
+        except (ValueError,KeyError,TypeError,AttributeError) as exc:
+            raise ValueError('Context notes could not be read. The original file was preserved.') from exc
+
+    def annotation(self, kind: str, ident: str) -> str:
+        return next((n['note'] for n in self.load_annotations() if n['kind']==kind and n['id']==ident),'')
+
+    def save_annotation(self, kind: str, ident: str, note: str) -> None:
+        if kind not in {'entity','device','area'} or not isinstance(ident,str) or not ident or len(ident)>512:
+            raise ValueError('Choose an entity, device or area from the snapshot.')
+        if any(ord(c)<32 for c in ident) or not isinstance(note,str) or len(note)>20000:
+            raise ValueError('Invalid note. Keep it below 20,000 characters.')
+        self.initialize()
+        notes=[n for n in self.load_annotations() if (n['kind'],n['id'])!=(kind,ident)]
+        if note.strip():notes.append({'kind':kind,'id':ident,'note':note})
+        notes.sort(key=lambda n:(n['kind'],n['id']))
+        raw=json.dumps({'schema':1,'annotations':notes},ensure_ascii=False,indent=2)+'\n'
+        if len(raw.encode())>1_048_576:raise ValueError('Context notes exceed the 1 MiB limit.')
+        private_replace(self.annotations,raw)
 
     def reset(self) -> None:
         self.initialize()

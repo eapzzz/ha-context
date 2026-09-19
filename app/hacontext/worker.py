@@ -128,9 +128,26 @@ def run_export(store: Store, progress=lambda message: None):
     sections['coverage.json']=engine.dump_json(coverage)
     sections['companion.json']=engine.dump_json(companions)
     sections['issues.json']=engine.dump_json(groups)
+    # Notes retain exact target IDs; descriptions alone go through secret masking.
+    maps={'entity':{r['entity_id']:r for r in entities},
+          'device':{r['id']:r for r in devices if 'id' in r},
+          'area':{r.get('area_id',r.get('id')):r for r in json.loads(sections.get('registries/area.json','[]'))}}
+    annotations=[]
+    for note in store.load_annotations():
+        match=maps[note['kind']].get(note['id'])
+        annotations.append({**note,'note':redactor.text(note['note']),
+                            'matched':match is not None,
+                            'name':(match.get('name_by_user') or match.get('name')) if match else None})
+    sections['annotations.json']=engine.dump_json({'schema':1,'source':'user-provided, not verified automatically','annotations':annotations})
     notes=store.notes.read_text() if store.notes.exists() else ''
-    sections['user-notes.md']='# User-provided notes (not verified automatically)\n\n'+redactor.text(notes)
+    sections['user-notes.md']='# User-provided notes (not verified automatically)\n\n## General context\n\n'+redactor.text(notes)
+    for note in annotations:
+        sections['user-notes.md']+='\n\n## '+note['kind'].title()+': '+note['id']+'\n'
+        if not note['matched']:sections['user-notes.md']+='Target not found in this snapshot; do not guess a replacement.\n'
+        sections['user-notes.md']+='\n'+note['note']+'\n'
     sections['context-guide.md']='''# Using this snapshot
+Read user-notes.md and annotations.json for general and exact-ID context. Unmatched
+notes are kept but must not be silently reassigned to another device.
 Start with summary.json and coverage.json. Use entities.json for IDs, enabled state,
 area and current attributes. Use companion.json to distinguish phone registrations,
 enabled sensors and stale entries; a sensor may be enabled but unavailable.
