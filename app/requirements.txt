@@ -1,0 +1,4 @@
+prompt_toolkit==3.0.52
+PyYAML==6.0.3
+websocket-client==1.9.0
+wcwidth==0.7.0

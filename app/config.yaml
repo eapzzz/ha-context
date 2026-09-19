@@ -1,0 +1,25 @@
+name: ha-context
+version: "2.0.1"
+slug: ha_context
+description: Read-only Home Assistant context with guided setup, phone inventory and private exports.
+arch:
+  - amd64
+  - aarch64
+startup: application
+boot: manual
+init: true
+ingress: true
+ingress_port: 8099
+ingress_stream: true
+panel_icon: mdi:file-document-outline
+panel_title: ha-context
+panel_admin: true
+homeassistant_api: true
+hassio_api: false
+host_network: false
+stage: experimental
+map:
+  - type: homeassistant_config
+    read_only: true
+options: {}
+schema: {}

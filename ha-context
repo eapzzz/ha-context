@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+  DIR="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+  SOURCE="$(readlink -- "$SOURCE")"
+  [[ "$SOURCE" = /* ]] || SOURCE="$DIR/$SOURCE"
+done
+ROOT="$(cd -P -- "$(dirname -- "$SOURCE")" && pwd)"
+export PYTHONDONTWRITEBYTECODE=1
+export PIP_CACHE_DIR="$ROOT/local/cache/pip"
+PYTHON="${HA_CONTEXT_PYTHON:-python3}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+  printf 'ha-context needs Python 3.10 or newer. Install Python on this Linux host first.\n' >&2
+  exit 1
+fi
+"$PYTHON" -c 'import sys;sys.exit(0 if sys.version_info >= (3,10) else 1)' || {
+  printf 'Python 3.10 or newer is required.\n' >&2; exit 1;
+}
+WANTED="$("$PYTHON" -c 'import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$ROOT/app/requirements.txt")"
+if [ -f "$ROOT/.vendor/requirements.sha256" ] && [ "$(cat "$ROOT/.vendor/requirements.sha256")" = "$WANTED" ]; then
+  export PYTHONPATH="$ROOT/app:$ROOT/.vendor"
+  exec "$PYTHON" -m hacontext "$@"
+fi
+if [ ! -x "$ROOT/.venv/bin/python" ] || [ ! -f "$ROOT/.venv/requirements.sha256" ] || [ "$(cat "$ROOT/.venv/requirements.sha256")" != "$WANTED" ]; then
+  printf '\nha-context  /  Preparing its private Python environment…\n'
+  mkdir -p "$ROOT/local/cache/pip"
+  chmod 700 "$ROOT/local"
+  "$PYTHON" -m venv "$ROOT/.venv" || {
+    printf 'Python venv is unavailable. Use the portable release, or install your distribution’s Python venv package.\n' >&2
+    exit 1
+  }
+  "$ROOT/.venv/bin/python" -m pip install --disable-pip-version-check -r "$ROOT/app/requirements.txt"
+  printf '%s\n' "$WANTED" > "$ROOT/.venv/requirements.sha256"
+fi
+export PYTHONPATH="$ROOT/app"
+exec "$ROOT/.venv/bin/python" -m hacontext "$@"

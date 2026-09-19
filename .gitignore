@@ -1,0 +1,12 @@
+/local/
+/.venv/
+/.vendor/
+/.ha-context-install.json
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+/build/
+/dist/
+.env
+*.log
